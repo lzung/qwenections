@@ -1,7 +1,7 @@
 # Fine-tuning configuration for Qwen Connections model
 
 model:
-  name: "Qwen/Qwen2.5-4B-Instruct" # Can be changed to other Qwen variants
+  name: "Qwen/Qwen2.5-3B-Instruct" # Can be changed to other Qwen variants
   max_length: 2048
   trust_remote_code: true
 
@@ -42,4 +42,8 @@ data:
   train_file: "./data/processed/train.jsonl"
   eval_file: "./data/processed/eval.jsonl"
   max_samples: null # null means use all data
+
+prompts:
+  template_file: "prompt_templates.yaml"
+  style: "default" # Options: default, concise, detailed, iterative, all_at_once
 

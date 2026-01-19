@@ -1,0 +1,63 @@
+# Prompt templates for NYT Connections fine-tuning and inference
+
+# System message for the assistant
+system_message: "You are a helpful assistant that solves NYT Connections puzzles."
+
+# Instruction template for training data
+# Variables: {words} will be replaced with the list of words
+instruction_template: |
+  You are playing NYT Connections. You are given 16 words.
+  Your task is to group them into 4 categories of 4 words each.
+  Each group shares a common theme or connection.
+
+# User message template for inference
+# Variables: {words} will be replaced with the list of words
+user_message_template: |
+  You are playing NYT Connections. You are given 16 words.
+  Your task is to group them into 4 categories of 4 words each.
+  Each group shares a common theme or connection.
+
+  Words: {words}
+
+# Output format template for training
+# Variables: {group_words}, {category}, {difficulty} will be replaced
+output_group_template: "Group ({difficulty}): {group_words} - Category: {category}"
+
+# Alternative prompt styles (can be switched via config)
+alternative_styles:
+  # Iterative approach: find one group at a time
+  iterative:
+    system_message: "You are a helpful assistant that solves NYT Connections puzzles by finding one group at a time."
+    instruction_template: |
+      You are playing NYT Connections. You are given {remaining_count} words.
+      Your task is to find ONE group of 4 words that share a common theme or connection.
+      After you identify a group, the remaining words will be used for the next groups.
+      Continue until you have found 3 groups (the 4th group will be automatically determined).
+
+      Words: {words}
+    user_message_template: |
+      You are playing NYT Connections. You are given {remaining_count} words.
+      Find ONE group of 4 words that share a common theme or connection.
+
+      Words: {words}
+    output_group_template: "Group found: {group_words} - Category: {category} (Difficulty: {difficulty})"
+    step_prompt_template: |
+      You have found {found_count} group(s) so far. 
+      Remaining words: {words}
+      Find the next group of 4 words that share a common theme.
+
+  # All-at-once approach: identify all 4 groups in one go
+  all_at_once:
+    system_message: "You are a helpful assistant that solves NYT Connections puzzles by identifying all groups at once."
+    instruction_template: |
+      You are playing NYT Connections. You are given 16 words.
+      Your task is to identify ALL 4 groups, each containing 4 words that share a common theme or connection.
+      Provide all 4 groups in your response.
+
+      Words: {words}
+    user_message_template: |
+      You are playing NYT Connections. You are given 16 words.
+      Identify ALL 4 groups, each containing 4 words that share a common theme or connection.
+
+      Words: {words}
+    output_group_template: "Group ({difficulty}): {group_words} - Category: {category}"
