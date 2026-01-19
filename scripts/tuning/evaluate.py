@@ -9,8 +9,14 @@ from pathlib import Path
 from typing import List, Dict
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from scripts.prompt_utils import (
+    load_prompt_templates,
+    get_prompt_style,
+    create_chat_messages
+)
 
-def load_model(model_path: str, base_model: str = "Qwen/Qwen2.5-4B-Instruct"):
+
+def load_model(model_path: str, base_model: str = "Qwen/Qwen2.5-3B-Instruct"):
     """Load fine-tuned model."""
     from peft import PeftModel
     
@@ -33,25 +39,31 @@ def load_model(model_path: str, base_model: str = "Qwen/Qwen2.5-4B-Instruct"):
     return model, tokenizer
 
 
-def solve_puzzle(model, tokenizer, words: List[str], max_new_tokens: int = 512):
-    """Solve a Connections puzzle."""
-    words_str = ", ".join(words)
-    
-    messages = [
-        {
-            "role": "system",
-            "content": "You are a helpful assistant that solves NYT Connections puzzles."
-        },
-        {
-            "role": "user",
-            "content": (
+def solve_puzzle(
+    model, 
+    tokenizer, 
+    words: List[str], 
+    max_new_tokens: int = 512,
+    prompt_templates: dict = None
+):
+    """Solve a Connections puzzle using prompt templates."""
+    if prompt_templates is None:
+        # Fallback to default
+        prompt_templates = {
+            "system_message": "You are a helpful assistant that solves NYT Connections puzzles.",
+            "user_message_template": (
                 "You are playing NYT Connections. You are given 16 words. "
                 "Your task is to group them into 4 categories of 4 words each. "
                 "Each group shares a common theme or connection.\n\n"
-                f"Words: {words_str}"
+                "Words: {words}"
             )
         }
-    ]
+    
+    messages = create_chat_messages(
+        words,
+        prompt_templates["system_message"],
+        prompt_templates["user_message_template"]
+    )
     
     # Format with chat template
     prompt = tokenizer.apply_chat_template(
@@ -78,13 +90,13 @@ def solve_puzzle(model, tokenizer, words: List[str], max_new_tokens: int = 512):
     return response.strip()
 
 
-def evaluate_on_puzzle(model, tokenizer, puzzle: Dict) -> Dict:
+def evaluate_on_puzzle(model, tokenizer, puzzle: Dict, prompt_templates: dict = None) -> Dict:
     """Evaluate model on a single puzzle."""
     words = puzzle["words"]
     expected_groups = puzzle["groups"]
     
     # Get model prediction
-    prediction = solve_puzzle(model, tokenizer, words)
+    prediction = solve_puzzle(model, tokenizer, words, prompt_templates=prompt_templates)
     
     # Parse prediction (simplified - you may want more sophisticated parsing)
     # For now, just return the raw prediction
@@ -99,11 +111,23 @@ def evaluate_on_puzzle(model, tokenizer, puzzle: Dict) -> Dict:
 def evaluate_model(
     model_path: str,
     test_data_file: str = "./data/processed/eval.jsonl",
-    base_model: str = "Qwen/Qwen2.5-7B-Instruct"
+    base_model: str = "Qwen/Qwen2.5-3B-Instruct",
+    prompt_template_file: str = "./prompt_templates.yaml",
+    prompt_style: str = "default"
 ):
     """Evaluate model on test dataset."""
     print(f"Loading model from {model_path}...")
     model, tokenizer = load_model(model_path, base_model)
+    
+    # Load prompt templates
+    try:
+        templates = load_prompt_templates(prompt_template_file)
+        prompt_templates = get_prompt_style(templates, prompt_style)
+        print(f"Loaded prompt style: {prompt_style}")
+    except Exception as e:
+        print(f"Warning: Could not load prompt templates: {e}")
+        print("Using default prompts...")
+        prompt_templates = None
     
     # Load test data
     print(f"Loading test data from {test_data_file}...")
@@ -135,7 +159,7 @@ def evaluate_model(
     results = []
     for i, puzzle in enumerate(test_puzzles):
         print(f"\nEvaluating puzzle {i+1}/{len(test_puzzles)}...")
-        result = evaluate_on_puzzle(model, tokenizer, puzzle)
+        result = evaluate_on_puzzle(model, tokenizer, puzzle, prompt_templates)
         results.append(result)
         
         print(f"Date: {result['date']}")
@@ -170,10 +194,28 @@ if __name__ == "__main__":
     parser.add_argument(
         "--base-model",
         type=str,
-        default="Qwen/Qwen2.5-7B-Instruct",
+        default="Qwen/Qwen2.5-3B-Instruct",
         help="Base model name"
+    )
+    parser.add_argument(
+        "--prompt-template-file",
+        type=str,
+        default="./prompt_templates.yaml",
+        help="Path to prompt template YAML file (default: ./prompt_templates.yaml)"
+    )
+    parser.add_argument(
+        "--prompt-style",
+        type=str,
+        default="default",
+        help="Prompt style to use: default, concise, detailed, etc. (default: default)"
     )
     
     args = parser.parse_args()
-    evaluate_model(args.model_path, args.test_data, args.base_model)
+    evaluate_model(
+        args.model_path, 
+        args.test_data, 
+        args.base_model,
+        args.prompt_template_file,
+        args.prompt_style
+    )
 

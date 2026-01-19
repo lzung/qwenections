@@ -7,8 +7,16 @@ Converts puzzle data into instruction-following format suitable for Qwen.
 
 import json
 import random
+import yaml
 from pathlib import Path
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
+
+from scripts.prompt_utils import (
+    load_prompt_templates,
+    get_prompt_style,
+    format_instruction,
+    format_output_group
+)
 
 
 def convert_nyt_format_to_puzzle(nyt_puzzle: Dict) -> Dict:
@@ -54,14 +62,20 @@ def convert_nyt_format_to_puzzle(nyt_puzzle: Dict) -> Dict:
     }
 
 
-def format_puzzle_as_instruction(puzzle: Dict) -> Dict:
+def format_puzzle_as_instruction(puzzle: Dict, prompt_templates: Dict) -> Dict:
     """
-    Format a puzzle into instruction-following format.
+    Format a puzzle into instruction-following format using prompt templates.
     
-    Format:
-    - Instruction: Describe the task
-    - Input: The 16 words
-    - Output: The 4 groups with their categories
+    Training data always uses the same format - the model always sees all 16 words
+    and is expected to identify all 4 groups. The iterative vs all-at-once distinction
+    is only for inference-time prompting and parsing.
+    
+    Args:
+        puzzle: Puzzle dictionary
+        prompt_templates: Prompt template dictionary
+    
+    Returns:
+        Dictionary with instruction, input, and output
     """
     words = puzzle["words"]
     groups = puzzle["groups"]
@@ -70,29 +84,38 @@ def format_puzzle_as_instruction(puzzle: Dict) -> Dict:
     shuffled_words = words.copy()
     random.shuffle(shuffled_words)
     
-    # Format input
-    words_str = ", ".join(shuffled_words)
-    instruction = (
-        "You are playing NYT Connections. You are given 16 words. "
-        "Your task is to group them into 4 categories of 4 words each. "
-        "Each group shares a common theme or connection."
-    )
+    return format_all_at_once_puzzle(puzzle, prompt_templates, shuffled_words)
+
+
+def format_all_at_once_puzzle(puzzle: Dict, prompt_templates: Dict, shuffled_words: List[str]) -> Dict:
+    """Format puzzle for all-at-once approach (all 4 groups at once)."""
+    words = puzzle["words"]
+    groups = puzzle["groups"]
     
-    # Format output
+    # Format instruction using template
+    instruction_template = prompt_templates["instruction_template"]
+    instruction = format_instruction(instruction_template, shuffled_words)
+    
+    # Format output using template
+    output_template = prompt_templates["output_group_template"]
     group_descriptions = []
     for group in groups:
-        words_in_group = ", ".join(group["words"])
+        words_in_group = group["words"]
         category = group["category"]
         difficulty = group.get("difficulty", "unknown")
-        group_descriptions.append(
-            f"Group ({difficulty}): {words_in_group} - Category: {category}"
+        group_desc = format_output_group(
+            output_template,
+            words_in_group,
+            category,
+            difficulty
         )
+        group_descriptions.append(group_desc)
     
     output = "\n".join(group_descriptions)
     
     return {
         "instruction": instruction,
-        "input": words_str,
+        "input": ", ".join(shuffled_words),
         "output": output,
         "metadata": {
             "date": puzzle.get("date", "unknown"),
@@ -103,19 +126,28 @@ def format_puzzle_as_instruction(puzzle: Dict) -> Dict:
     }
 
 
-def create_chat_format(example: Dict) -> Dict:
+# Note: format_iterative_puzzle removed - training data always uses consistent format
+# Iterative approach is only used at inference time in play.py and evaluate.py
+
+
+def create_chat_format(example: Dict, prompt_templates: Dict) -> Dict:
     """
-    Convert to Qwen chat format.
+    Convert to Qwen chat format using prompt templates.
     Qwen2.5 uses a specific chat template.
+    
+    Training data always uses consistent format - combine instruction and input.
     """
+    # Combine instruction and input
+    user_content = f"{example['instruction']}\n\nWords: {example['input']}"
+    
     messages = [
         {
             "role": "system",
-            "content": "You are a helpful assistant that solves NYT Connections puzzles."
+            "content": prompt_templates["system_message"]
         },
         {
             "role": "user",
-            "content": f"{example['instruction']}\n\nWords: {example['input']}"
+            "content": user_content
         },
         {
             "role": "assistant",
@@ -158,18 +190,22 @@ def load_puzzles(data_dir: Path) -> List[Dict]:
 
 def prepare_training_data(
     connections_file: str = "./connections.json",
-    raw_data_dir: str = None,
     output_dir: str = "./data/processed",
-    train_split: float = 0.9
+    train_split: float = 0.9,
+    prompt_template_file: str = "./prompt_templates.yaml",
+    prompt_style: str = "default"
 ):
     """
-    Prepare training data from connections.json or raw puzzle files.
+    Prepare training data from connections.json
+    
+    Model always sees all 16 words and is expected to identify all 4 groups during training.
     
     Args:
         connections_file: Path to connections.json file (primary source)
-        raw_data_dir: Optional directory containing additional raw puzzle JSON files
         output_dir: Directory to save processed data
         train_split: Fraction of data to use for training (rest for eval)
+        prompt_template_file: Path to prompt template YAML file
+        prompt_style: Prompt style to use (default, concise, detailed, etc.)
     """
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -185,23 +221,31 @@ def prepare_training_data(
     else:
         print(f"Warning: {connections_file} not found. Skipping...")
     
-    # Optionally load additional puzzles from raw_data_dir
-    if raw_data_dir:
-        raw_path = Path(raw_data_dir)
-        if raw_path.exists():
-            additional_puzzles = load_puzzles(raw_path)
-            print(f"Loaded {len(additional_puzzles)} additional puzzles from {raw_data_dir}")
-            puzzles.extend(additional_puzzles)
-    
     if len(puzzles) == 0:
         print("Warning: No puzzles found. Please ensure connections.json exists or collect data first.")
         return
     
-    # Convert to instruction format
+    # Load prompt templates
+    print(f"Loading prompt templates from {prompt_template_file} (style: {prompt_style})...")
+    try:
+        templates = load_prompt_templates(prompt_template_file)
+        prompt_templates = get_prompt_style(templates, prompt_style)
+    except Exception as e:
+        print(f"Warning: Could not load prompt templates: {e}")
+        print("Using default prompts...")
+        # Fallback to default templates
+        prompt_templates = {
+            "system_message": "You are a helpful assistant that solves NYT Connections puzzles.",
+            "instruction_template": "You are playing NYT Connections. You are given 16 words.\nYour task is to group them into 4 categories of 4 words each.\nEach group shares a common theme or connection.\n\nWords: {words}",
+            "user_message_template": "You are playing NYT Connections. You are given 16 words.\nYour task is to group them into 4 categories of 4 words each.\nEach group shares a common theme or connection.\n\nWords: {words}",
+            "output_group_template": "Group ({difficulty}): {group_words} - Category: {category}"
+        }
+    
+    # Convert to instruction format - always use consistent format for training
     formatted_examples = []
     for puzzle in puzzles:
-        formatted = format_puzzle_as_instruction(puzzle)
-        chat_format = create_chat_format(formatted)
+        formatted = format_puzzle_as_instruction(puzzle, prompt_templates)
+        chat_format = create_chat_format(formatted, prompt_templates)
         formatted_examples.append(chat_format)
     
     # Shuffle and split
@@ -238,12 +282,6 @@ if __name__ == "__main__":
         help="Path to connections.json file (default: ./connections.json)"
     )
     parser.add_argument(
-        "--raw-data-dir",
-        type=str,
-        default=None,
-        help="Optional directory containing additional raw puzzle JSON files"
-    )
-    parser.add_argument(
         "--output-dir",
         type=str,
         default="./data/processed",
@@ -255,12 +293,25 @@ if __name__ == "__main__":
         default=0.9,
         help="Fraction of data for training (default: 0.9)"
     )
+    parser.add_argument(
+        "--prompt-template-file",
+        type=str,
+        default="./prompt_templates.yaml",
+        help="Path to prompt template YAML file (default: ./prompt_templates.yaml)"
+    )
+    parser.add_argument(
+        "--prompt-style",
+        type=str,
+        default="default",
+        help="Prompt style to use: default, concise, detailed, etc. (default: default)"
+    )
     
     args = parser.parse_args()
     prepare_training_data(
         args.connections_file,
-        args.raw_data_dir,
         args.output_dir,
-        args.train_split
+        args.train_split,
+        args.prompt_template_file,
+        args.prompt_style
     )
 

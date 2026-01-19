@@ -25,7 +25,7 @@ from accelerate import Accelerator
 @dataclass
 class ModelConfig:
     """Model configuration."""
-    name: str = "Qwen/Qwen2.5-4B-Instruct"
+    name: str = "Qwen/Qwen2.5-3B-Instruct"
     max_length: int = 2048
     trust_remote_code: bool = True
 

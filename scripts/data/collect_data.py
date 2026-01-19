@@ -18,17 +18,21 @@ URL = f"https://www.nytimes.com/svc/connections/v2/{con_date}.json"
 r = requests.get(URL)
 content = json.loads(r.content)
 print(f"Adding Connection #{id} from {con_date}")
+
+# Parse response into groups
+# V2 API does not include the levelings, using -1 by default going forward
 groups = []
 for group in content["categories"]:
-    categ = {"level":-1,"group":group["title"],"members":[]}
+    ctgy = {"level": -1, "group": group["title"], "members": []}
     for member in group["cards"]:
-        categ["members"].append(member["content"])
-    groups.append(categ)
+        ctgy["members"].append(member["content"])
+    groups.append(ctgy)
 
-    
+ # Formatting   
 con_item = {"id":int(id),"date":con_date,"answers": groups}
 connections.append(con_item)
-    
+
+# Dump to file    
 with open('connections.json', 'w') as f:
         json.dump(connections, f, indent=4)
         f.close()
