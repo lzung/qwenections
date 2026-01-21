@@ -1,8 +1,8 @@
 # Fine-tuning configuration for Qwen Connections model
 
 model:
-  name: "Qwen/Qwen2.5-1.5B-Instruct" # Change to other Qwen variants
-  max_length: 512
+  name: "Qwen/Qwen2.5-1.5B-Instruct"
+  max_length: 256
   trust_remote_code: true
 
 training:
@@ -41,7 +41,7 @@ lora:
 data:
   train_file: "./data/processed/train.jsonl"
   eval_file: "./data/processed/eval.jsonl"
-  max_samples: 100 # Limit to 100 samples for quick testing
+  max_samples: 50
 
 prompts:
   template_file: "prompt_templates.yaml"

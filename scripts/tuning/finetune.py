@@ -80,11 +80,12 @@ def load_model_and_tokenizer(config: dict):
     # For CPU training, disable device_map offloading to avoid device mismatch
     device_map = None if device.type == "cpu" else "auto"
     
+
     model = AutoModelForCausalLM.from_pretrained(
         model_config.name,
         trust_remote_code=model_config.trust_remote_code,
         torch_dtype=torch_dtype,
-        device_map=device_map,
+        device_map=device_map
     )
     
     # Disable use_cache to enable gradient computation
