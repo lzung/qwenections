@@ -46,4 +46,3 @@ data:
 prompts:
   template_file: "prompt_templates.yaml"
   style: "default" # Options: default, concise, detailed, iterative, all_at_once
-

@@ -115,15 +115,50 @@ def load_model_and_tokenizer(config: dict):
     return model, tokenizer
 
 
-def format_prompts(examples, tokenizer):
-    """Format examples for training."""
-    # Apply chat template
-    # When batched=True, examples["messages"] is a list of message lists
+def load_prompt_templates(config: dict) -> dict:
+    """Load prompt templates from config."""
+    prompts_config = config.get("prompts", {})
+    template_file = prompts_config.get("template_file", "prompt_templates.yaml")
+    style = prompts_config.get("style", "default")
+    
+    with open(template_file, "r") as f:
+        templates = yaml.safe_load(f)
+    
+    # Get templates for the selected style
+    if style == "default":
+        return {
+            "system_message": templates.get("system_message", ""),
+            "instruction_template": templates.get("instruction_template", ""),
+        }
+    else:
+        alt_style = templates.get("alternative_styles", {}).get(style, {})
+        return {
+            "system_message": alt_style.get("system_message", templates.get("system_message", "")),
+            "instruction_template": alt_style.get("instruction_template", templates.get("instruction_template", "")),
+        }
+
+
+def format_prompts(examples, tokenizer, prompt_templates):
+    """Format examples for training using custom prompt templates."""
+    # Extract templates
+    system_message = prompt_templates.get("system_message", "")
+    instruction_template = prompt_templates.get("instruction_template", "")
+    
     formatted_texts = []
-    for messages in examples["messages"]:
-        # Qwen2.5 uses apply_chat_template
+    for i, messages in enumerate(examples.get("messages", [])):
+        # Build custom message with system message and instruction
+        custom_messages = [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": instruction_template}
+        ]
+        
+        # Add assistant response if available
+        if "response" in examples and i < len(examples["response"]):
+            custom_messages.append({"role": "assistant", "content": examples["response"][i]})
+        
+        # Apply tokenizer's chat template to format the messages
         formatted = tokenizer.apply_chat_template(
-            messages,
+            custom_messages,
             tokenize=False,
             add_generation_prompt=False
         )
@@ -302,6 +337,10 @@ def main():
     # Load configuration
     config = load_config(args.config)
     
+    # Load prompt templates
+    logger.info("Loading prompt templates...")
+    prompt_templates = load_prompt_templates(config)
+    
     # Load model and tokenizer
     logger.info("Loading model and tokenizer...")
     model, tokenizer = load_model_and_tokenizer(config)
@@ -330,12 +369,12 @@ def main():
     # Format prompts
     logger.info("Formatting prompts...")
     train_dataset = train_dataset.map(
-        lambda examples: format_prompts(examples, tokenizer),
+        lambda examples: format_prompts(examples, tokenizer, prompt_templates),
         batched=True,
         remove_columns=train_dataset.column_names
     )
     eval_dataset = eval_dataset.map(
-        lambda examples: format_prompts(examples, tokenizer),
+        lambda examples: format_prompts(examples, tokenizer, prompt_templates),
         batched=True,
         remove_columns=eval_dataset.column_names
     )

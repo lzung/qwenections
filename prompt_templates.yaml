@@ -32,7 +32,7 @@ alternative_styles:
       You are playing NYT Connections. You are given {remaining_count} words.
       Your task is to find ONE group of 4 words that share a common theme or connection.
       After you identify a group, the remaining words will be used for the next groups.
-      Continue until you have found 3 groups (the 4th group will be automatically determined).
+      Continue until you have found a 4 groups.
 
       Words: {words}
     user_message_template: |

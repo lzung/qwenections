@@ -4,9 +4,11 @@ Interactive script to play NYT Connections with the fine-tuned model.
 """
 
 import torch
+import json
+import random
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from pathlib import Path
-from typing import List
+from typing import List, Tuple
 
 from scripts.prompt_utils import (
     load_prompt_templates,
@@ -15,15 +17,96 @@ from scripts.prompt_utils import (
 )
 
 
+def load_latest_puzzle(connections_file: str = "./connections.json") -> Tuple[List[str], dict]:
+    """Load the most recent puzzle from connections.json and extract words.
+    
+    Returns:
+        Tuple of (scrambled_words, puzzle_data)
+    """
+    with open(connections_file, "r") as f:
+        puzzles = json.load(f)
+    
+    # Get the most recent puzzle (highest id)
+    latest_puzzle = max(puzzles, key=lambda x: x["id"])
+    
+    # Extract all words from the puzzle
+    words = []
+    for group in latest_puzzle["answers"]:
+        words.extend(group["members"])
+    
+    # Scramble the words
+    scrambled = words.copy()
+    random.shuffle(scrambled)
+    
+    return scrambled, latest_puzzle
+
+
+def load_puzzles_by_ids(puzzle_ids: List[int], connections_file: str = "./connections.json") -> List[Tuple[List[str], dict]]:
+    """Load specific puzzles by ID.
+    
+    Returns:
+        List of tuples (scrambled_words, puzzle_data)
+    """
+    with open(connections_file, "r") as f:
+        puzzles = json.load(f)
+    
+    puzzle_map = {p["id"]: p for p in puzzles}
+    results = []
+    
+    for puzzle_id in puzzle_ids:
+        if puzzle_id in puzzle_map:
+            puzzle = puzzle_map[puzzle_id]
+            words = []
+            for group in puzzle["answers"]:
+                words.extend(group["members"])
+            scrambled = words.copy()
+            random.shuffle(scrambled)
+            results.append((scrambled, puzzle))
+        else:
+            print(f"Warning: Puzzle ID {puzzle_id} not found")
+    
+    return results
+
+
+def load_n_recent_puzzles(n: int, connections_file: str = "./connections.json") -> List[Tuple[List[str], dict]]:
+    """Load the N most recent puzzles.
+    
+    Returns:
+        List of tuples (scrambled_words, puzzle_data)
+    """
+    with open(connections_file, "r") as f:
+        puzzles = json.load(f)
+    
+    # Sort by ID descending and take first N
+    sorted_puzzles = sorted(puzzles, key=lambda x: x["id"], reverse=True)[:n]
+    results = []
+    
+    for puzzle in sorted_puzzles:
+        words = []
+        for group in puzzle["answers"]:
+            words.extend(group["members"])
+        scrambled = words.copy()
+        random.shuffle(scrambled)
+        results.append((scrambled, puzzle))
+    
+    return results
+
+
 def load_model(model_path: str, base_model: str = "Qwen/Qwen2.5-3B-Instruct"):
     """Load fine-tuned model."""
     from peft import PeftModel
     
     tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=True)
+    
+    # Detect device and set appropriate dtype and device_map
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    torch_dtype = torch.float32 if device.type == "cpu" else torch.float16
+    device_map = None if device.type == "cpu" else "auto"  # No device_map offloading on CPU
+    
     base_model_obj = AutoModelForCausalLM.from_pretrained(
         base_model,
-        torch_dtype=torch.float16,
-        device_map="auto",
+        torch_dtype=torch_dtype,
+        device_map=device_map,
         trust_remote_code=True
     )
     
@@ -173,34 +256,43 @@ def main():
         help="Base model name"
     )
     parser.add_argument(
-        "--prompt-template-file",
-        type=str,
-        default="./prompt_templates.yaml",
-        help="Path to prompt template YAML file (default: ./prompt_templates.yaml)"
-    )
-    parser.add_argument(
-        "--prompt-style",
-        type=str,
-        default="default",
-        help="Prompt style to use: default, concise, detailed, iterative, all_at_once (default: default)"
-    )
-    parser.add_argument(
         "--approach",
         type=str,
         choices=["all_at_once", "iterative"],
         default="all_at_once",
         help="Solving approach: 'all_at_once' (find all 4 groups) or 'iterative' (find one at a time) (default: all_at_once)"
     )
+    parser.add_argument(
+        "--from-latest",
+        action="store_true",
+        help="Load words from the most recent puzzle in connections.json and scramble them"
+    )
+    parser.add_argument(
+        "--connections-file",
+        type=str,
+        default="./connections.json",
+        help="Path to connections.json file (default: ./connections.json)"
+    )
+    parser.add_argument(
+        "--num-puzzles",
+        type=int,
+        default=1,
+        help="Number of recent puzzles to solve (default: 1)"
+    )
+    parser.add_argument(
+        "--puzzle-ids",
+        type=int,
+        nargs="+",
+        help="Specific puzzle IDs to solve (e.g., --puzzle-ids 1 5 10)"
+    )
     
     args = parser.parse_args()
     
-    # Load prompt templates
+    # Load prompt templates based on approach
     try:
-        templates = load_prompt_templates(args.prompt_template_file)
-        # Use approach-specific style if available, otherwise use specified style
-        style_to_use = args.approach if args.approach in ["iterative", "all_at_once"] else args.prompt_style
-        prompt_templates = get_prompt_style(templates, style_to_use)
-        print(f"Loaded prompt style: {style_to_use}")
+        templates = load_prompt_templates("./prompt_templates.yaml")
+        prompt_templates = get_prompt_style(templates, args.approach)
+        print(f"Loaded {args.approach} approach templates")
     except Exception as e:
         print(f"Warning: Could not load prompt templates: {e}")
         print("Using default prompts...")
@@ -209,24 +301,73 @@ def main():
     print("Loading model...")
     model, tokenizer = load_model(args.model_path, args.base_model)
     print(f"Model loaded! Using {args.approach} approach.")
-    print("Enter 16 words separated by commas, or 'quit' to exit.\n")
     
-    while True:
-        user_input = input("Enter 16 words (comma-separated): ").strip()
-        
-        if user_input.lower() in ["quit", "exit", "q"]:
-            break
-        
-        words = [w.strip().upper() for w in user_input.split(",")]
-        
-        if len(words) != 16:
-            print(f"Error: Expected 16 words, got {len(words)}")
-            continue
-        
-        print(f"\nSolving puzzle using {args.approach} approach...")
+    if args.from_latest:
+        # Load and solve the latest puzzle automatically
+        print(f"Loading latest puzzle from {args.connections_file}...")
+        words, puzzle_data = load_latest_puzzle(args.connections_file)
+        print(f"Loaded puzzle ID {puzzle_data['id']} (date: {puzzle_data['date']})")
+        print(f"Words (scrambled): {', '.join(words)}\n")
+        print(f"Solving puzzle using {args.approach} approach...")
         solution = solve_puzzle(model, tokenizer, words, prompt_templates, args.approach)
         print(f"\nSolution:\n{solution}\n")
-        print("-" * 50 + "\n")
+        
+        # Print expected answers for comparison
+        print("Expected answers:")
+        for group in puzzle_data["answers"]:
+            print(f"  {group['group']} ({group['level']}): {', '.join(group['members'])}")
+    
+    elif args.puzzle_ids:
+        # Solve specific puzzles by ID
+        print(f"Loading puzzles with IDs: {args.puzzle_ids}")
+        puzzles_to_solve = load_puzzles_by_ids(args.puzzle_ids, args.connections_file)
+        
+        for i, (words, puzzle_data) in enumerate(puzzles_to_solve, 1):
+            print(f"\n{'='*60}")
+            print(f"Puzzle {i}/{len(puzzles_to_solve)} - ID {puzzle_data['id']} (date: {puzzle_data['date']})")
+            print(f"{'='*60}")
+            print(f"Words (scrambled): {', '.join(words)}\n")
+            print(f"Solving puzzle using {args.approach} approach...")
+            solution = solve_puzzle(model, tokenizer, words, prompt_templates, args.approach)
+            print(f"\nSolution:\n{solution}\n")
+            
+            print("Expected answers:")
+            for group in puzzle_data["answers"]:
+                print(f"  {group['group']} ({group['level']}): {', '.join(group['members'])}")
+    
+    elif args.num_puzzles > 1:
+        # Solve N most recent puzzles
+        print(f"Loading {args.num_puzzles} most recent puzzles...")
+        puzzles_to_solve = load_n_recent_puzzles(args.num_puzzles, args.connections_file)
+        
+        for i, (words, puzzle_data) in enumerate(puzzles_to_solve, 1):
+            print(f"\n{'='*60}")
+            print(f"Puzzle {i}/{len(puzzles_to_solve)} - ID {puzzle_data['id']} (date: {puzzle_data['date']})")
+            print(f"{'='*60}")
+            print(f"Words (scrambled): {', '.join(words)}\n")
+            print(f"Solving puzzle using {args.approach} approach...")
+            solution = solve_puzzle(model, tokenizer, words, prompt_templates, args.approach)
+            print(f"\nSolution:\n{solution}\n")
+            
+            print("Expected answers:")
+            for group in puzzle_data["answers"]:
+                print(f"  {group['group']} ({group['level']}): {', '.join(group['members'])}")
+    
+    else:
+        # Single manual puzzle entry
+        print("Enter 16 words separated by commas, or 'quit' to exit.\n")
+        
+        user_input = input("Enter 16 words (comma-separated): ").strip()
+        
+        if user_input.lower() not in ["quit", "exit", "q"]:
+            words = [w.strip().upper() for w in user_input.split(",")]
+            
+            if len(words) != 16:
+                print(f"Error: Expected 16 words, got {len(words)}")
+            else:
+                print(f"\nSolving puzzle using {args.approach} approach...")
+                solution = solve_puzzle(model, tokenizer, words, prompt_templates, args.approach)
+                print(f"\nSolution:\n{solution}\n")
 
 
 if __name__ == "__main__":
