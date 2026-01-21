@@ -23,7 +23,7 @@ user_message_template: |
 # Variables: {group_words}, {category}, {difficulty} will be replaced
 output_group_template: "Group ({difficulty}): {group_words} - Category: {category}"
 
-# Alternative prompt styles (can be switched via config)
+# Alternative prompt styles for evaluation or inference
 alternative_styles:
   # Iterative approach: find one group at a time
   iterative:

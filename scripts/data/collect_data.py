@@ -29,7 +29,7 @@ for group in content["categories"]:
     groups.append(ctgy)
 
  # Formatting   
-con_item = {"id":int(id),"date":con_date,"answers": groups}
+con_item = {"id": int(id), "date": con_date, "answers": groups}
 connections.append(con_item)
 
 # Dump to file    

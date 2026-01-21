@@ -23,7 +23,6 @@ from transformers import (
 )
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from datasets import load_dataset
-from accelerate import Accelerator
 
 
 # Set up logging
@@ -74,13 +73,22 @@ def load_model_and_tokenizer(config: dict):
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     
-    # Load model
+    # Load model - detect device for CPU vs GPU
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    torch_dtype = torch.float32 if device.type == "cpu" else torch.float16
+    
+    # For CPU training, disable device_map offloading to avoid device mismatch
+    device_map = None if device.type == "cpu" else "auto"
+    
     model = AutoModelForCausalLM.from_pretrained(
         model_config.name,
         trust_remote_code=model_config.trust_remote_code,
-        torch_dtype=torch.float16,
-        device_map="auto",
+        torch_dtype=torch_dtype,
+        device_map=device_map,
     )
+    
+    # Disable use_cache to enable gradient computation
+    model.config.use_cache = False
     
     # Apply LoRA if enabled
     if config.get("lora", {}).get("enabled", True):
@@ -96,9 +104,11 @@ def load_model_and_tokenizer(config: dict):
             task_type="CAUSAL_LM",
         )
         
-        # Prepare model for training (works with both quantized and float16 models)
-        model = prepare_model_for_kbit_training(model)
+        # Apply LoRA and enable gradients
         model = get_peft_model(model, peft_config)
+        # Ensure model parameters require gradients
+        for param in model.parameters():
+            param.requires_grad = True
         model.print_trainable_parameters()
     
     return model, tokenizer
@@ -355,15 +365,16 @@ def main():
         warmup_steps=training_config["warmup_steps"],
         logging_steps=training_config["logging_steps"],
         save_steps=training_config["save_steps"],
-        eval_steps=training_config["eval_steps"],
+        eval_steps=training_config.get("eval_steps", 500),
         save_total_limit=training_config["save_total_limit"],
         fp16=training_config.get("fp16", True),
         gradient_checkpointing=training_config.get("gradient_checkpointing", True),
         optim=training_config.get("optim", "adamw_torch"),
         lr_scheduler_type=training_config.get("lr_scheduler_type", "cosine"),
-        eval_strategy="steps",
-        load_best_model_at_end=True,
+        eval_strategy="no",  # Disable evaluation during training for speed
         report_to="none",  # Can change to "wandb" or "tensorboard"
+        dataloader_pin_memory=False,  # Disable pin_memory for CPU training
+        dataloader_num_workers=0,  # No multiprocessing on CPU to save memory
     )
     
     # Data collator
